@@ -5,6 +5,7 @@ import { Sidebar } from "@/components/sidebar";
 import { PreviewCanvas } from "@/components/preview-canvas";
 import { ExportSuccess } from "@/components/export-success";
 import { useDitherWorker } from "@/hooks/use-dither-worker";
+import { useIsMobile } from "@/hooks/use-is-mobile";
 import {
   DEFAULT_PARAMS,
   DEFAULT_ALGORITHM,
@@ -40,6 +41,7 @@ export default function App() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [pixelSize, setPixelSize] = useState(1);
 
+  const isMobile = useIsMobile();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   // Cache for scaled source ImageData — avoid redrawing on every param change
@@ -320,27 +322,49 @@ export default function App() {
           error={uploadError}
         />
       ) : (
-        <div className="flex flex-1 overflow-hidden">
-          <Sidebar
-            params={params}
-            algorithm={algorithm}
-            canvasWidth={canvasWidth}
-            canvasHeight={canvasHeight}
-            pixelSize={pixelSize}
-            thumbnails={thumbnails}
-            onParamChange={handleParamChange}
-            onParamCommit={handleParamCommit}
-            onAlgorithmChange={setAlgorithm}
-            onWidthChange={handleWidthChange}
-            onHeightChange={handleHeightChange}
-            onPixelSizeChange={setPixelSize}
-          />
+        <div className={`flex flex-1 overflow-hidden ${isMobile ? "flex-col" : ""}`}>
+          {!isMobile && (
+            <Sidebar
+              params={params}
+              algorithm={algorithm}
+              canvasWidth={canvasWidth}
+              canvasHeight={canvasHeight}
+              pixelSize={pixelSize}
+              thumbnails={thumbnails}
+              onParamChange={handleParamChange}
+              onParamCommit={handleParamCommit}
+              onAlgorithmChange={setAlgorithm}
+              onWidthChange={handleWidthChange}
+              onHeightChange={handleHeightChange}
+              onPixelSizeChange={setPixelSize}
+            />
+          )}
 
           <PreviewCanvas
             ref={canvasRef}
             showOriginal={showOriginal}
             isProcessing={isProcessing}
           />
+
+          {isMobile && (
+            <Sidebar
+              params={params}
+              algorithm={algorithm}
+              canvasWidth={canvasWidth}
+              canvasHeight={canvasHeight}
+              pixelSize={pixelSize}
+              thumbnails={thumbnails}
+              onParamChange={handleParamChange}
+              onParamCommit={handleParamCommit}
+              onAlgorithmChange={setAlgorithm}
+              onWidthChange={handleWidthChange}
+              onHeightChange={handleHeightChange}
+              onPixelSizeChange={setPixelSize}
+              isMobile
+              onReset={handleReset}
+              onExport={handleExport}
+            />
+          )}
         </div>
       )}
 
