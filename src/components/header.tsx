@@ -1,5 +1,6 @@
 import { Eye, EyeOff, ImagePlus, Grid3X3, RotateCcw, Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import ditherLogo from "../../public/ditherlogo.svg";
 
 interface HeaderProps {
   hasImage: boolean;
@@ -22,7 +23,7 @@ export function Header({
     <header className="flex items-center justify-between px-5 py-3 border-b border-neutral-900 shrink-0">
       <div className="flex items-center gap-3">
         <div className="w-6 h-6 rounded-md bg-neutral-800 flex items-center justify-center">
-          <img src="/ditherlogo.svg" alt="Dithering made easy" />
+          <img src={ditherLogo} alt="Dithering made easy" />
         </div>
         <h1 className="text-xs font-semibold tracking-wider uppercase text-neutral-400">
           Dither Tool
