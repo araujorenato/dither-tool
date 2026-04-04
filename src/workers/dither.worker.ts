@@ -39,6 +39,7 @@ export interface WorkerMessage {
   params: ImageParams;
   algorithm: AlgorithmId;
   id: number;
+  frameIndex?: number;
 }
 
 export interface WorkerResponse {
@@ -46,10 +47,11 @@ export interface WorkerResponse {
   result: ImageData;
   algorithm: AlgorithmId;
   id: number;
+  frameIndex?: number;
 }
 
 self.onmessage = (e: MessageEvent<WorkerMessage>) => {
-  const { type, imageData, params, algorithm, id } = e.data;
+  const { type, imageData, params, algorithm, id, frameIndex } = e.data;
   const { width, height } = imageData;
   const pixelCount = width * height;
   const rgbaSize   = pixelCount * 4;
@@ -69,6 +71,6 @@ self.onmessage = (e: MessageEvent<WorkerMessage>) => {
   const dithered = algorithmFns[algorithm](gray, width, height, params.granulation, ditherSlice);
   const result   = grayToImageData(dithered, width, height, outputSlice);
 
-  const response: WorkerResponse = { type, result, algorithm, id };
+  const response: WorkerResponse = { type, result, algorithm, id, frameIndex };
   self.postMessage(response);
 };

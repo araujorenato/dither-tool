@@ -3,7 +3,7 @@ import type { AlgorithmId, ImageParams } from "@/lib/types";
 import type { WorkerResponse } from "@/workers/dither.worker";
 
 interface UseDitherWorkerOptions {
-  onResult: (result: ImageData, type: "process" | "thumbnail", algorithm: AlgorithmId, id: number) => void;
+  onResult: (result: ImageData, type: "process" | "thumbnail", algorithm: AlgorithmId, id: number, frameIndex?: number) => void;
 }
 
 export function useDitherWorker({ onResult }: UseDitherWorkerOptions) {
@@ -17,8 +17,8 @@ export function useDitherWorker({ onResult }: UseDitherWorkerOptions) {
     );
 
     workerRef.current.onmessage = (e: MessageEvent<WorkerResponse>) => {
-      const { type, result, algorithm, id } = e.data;
-      onResult(result, type, algorithm, id);
+      const { type, result, algorithm, id, frameIndex } = e.data;
+      onResult(result, type, algorithm, id, frameIndex);
     };
 
     return () => {
@@ -31,7 +31,8 @@ export function useDitherWorker({ onResult }: UseDitherWorkerOptions) {
       imageData: ImageData,
       params: ImageParams,
       algorithm: AlgorithmId,
-      type: "process" | "thumbnail" = "process"
+      type: "process" | "thumbnail" = "process",
+      frameIndex?: number
     ) => {
       if (!workerRef.current) return -1;
       idRef.current += 1;
@@ -41,6 +42,7 @@ export function useDitherWorker({ onResult }: UseDitherWorkerOptions) {
         params,
         algorithm,
         id: idRef.current,
+        frameIndex,
       });
       return idRef.current;
     },

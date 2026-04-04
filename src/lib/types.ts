@@ -53,5 +53,16 @@ export const ALGORITHMS: Record<AlgorithmId, AlgorithmInfo> = {
   },
 };
 
+export interface AnimationFrame {
+  id: string;
+  image: LoadedImage;
+  params: ImageParams;
+  committedParams: ImageParams;
+  algorithm: AlgorithmId;
+  pixelSize: number;
+  processedData: ImageData | null;
+  thumbnailUrl: string | null;
+}
+
 export const VALID_IMAGE_TYPES = ["image/png", "image/jpeg", "image/webp"];
 export const MAX_DIMENSION = 4000;
