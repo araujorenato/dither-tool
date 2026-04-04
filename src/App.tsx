@@ -5,6 +5,7 @@ import { Sidebar } from "@/components/sidebar";
 import { PreviewCanvas } from "@/components/preview-canvas";
 import { ExportSuccess } from "@/components/export-success";
 import { useDitherWorker } from "@/hooks/use-dither-worker";
+import { useWebGLDither } from "@/hooks/use-webgl-dither";
 import { useIsMobile } from "@/hooks/use-is-mobile";
 import {
   DEFAULT_PARAMS,
@@ -19,76 +20,138 @@ import type {
   ExportInfo,
 } from "@/lib/types";
 
-const DEBOUNCE_BY_ALGORITHM: Record<AlgorithmId, number> = {
-  bayer: 30,
-  "floyd-steinberg": 50,
-  stucki: 80,
-};
-
 export default function App() {
   // ─── State ───
-  const [image, setImage] = useState<LoadedImage | null>(null);
-  const [params, setParams] = useState<ImageParams>({ ...DEFAULT_PARAMS });
-  const [committedParams, setCommittedParams] = useState<ImageParams>({ ...DEFAULT_PARAMS });
-  const [algorithm, setAlgorithm] = useState<AlgorithmId>(DEFAULT_ALGORITHM);
-  const [showOriginal, setShowOriginal] = useState(false);
-  const [exportDialog, setExportDialog] = useState<ExportInfo | null>(null);
-  const [uploadError, setUploadError] = useState<string | null>(null);
-  const [canvasWidth, setCanvasWidth] = useState(0);
-  const [canvasHeight, setCanvasHeight] = useState(0);
-  const [aspectRatio, setAspectRatio] = useState(1);
-  const [thumbnails, setThumbnails] = useState<Record<string, string>>({});
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [pixelSize, setPixelSize] = useState(1);
+  const [image, setImage]                       = useState<LoadedImage | null>(null);
+  const [params, setParams]                     = useState<ImageParams>({ ...DEFAULT_PARAMS });
+  const [committedParams, setCommittedParams]   = useState<ImageParams>({ ...DEFAULT_PARAMS });
+  const [algorithm, setAlgorithm]               = useState<AlgorithmId>(DEFAULT_ALGORITHM);
+  const [showOriginal, setShowOriginal]         = useState(false);
+  const [exportDialog, setExportDialog]         = useState<ExportInfo | null>(null);
+  const [uploadError, setUploadError]           = useState<string | null>(null);
+  const [canvasWidth, setCanvasWidth]           = useState(0);
+  const [canvasHeight, setCanvasHeight]         = useState(0);
+  const [aspectRatio, setAspectRatio]           = useState(1);
+  const [thumbnails, setThumbnails]             = useState<Record<string, string>>({});
+  const [pixelSize, setPixelSize]               = useState(1);
 
   const isMobile = useIsMobile();
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  // Cache for scaled source ImageData — avoid redrawing on every param change
-  const srcDataRef = useRef<ImageData | null>(null);
-  const srcDimensionsRef = useRef({ w: 0, h: 0, imageId: "" });
-  // Stale result guard for async worker responses
-  const latestProcessIdRef = useRef(0);
-  // Ref so the worker result callback can read pixelSize without being in its deps
-  const pixelSizeRef = useRef(1);
-  pixelSizeRef.current = pixelSize;
 
-  // ─── Worker ───
+  // ─── WebGL renderer ───
+  const {
+    canvasRef,
+    loadImage:        glLoadImage,
+    setCanvasSize:    glSetCanvasSize,
+    setParams:        glSetParams,
+    setAlgorithm:     glSetAlgorithm,
+    setPixelSize:     glSetPixelSize,
+    setShowOriginal:  glSetShowOriginal,
+    displayFrame,
+    exportDataUrl,
+  } = useWebGLDither();
+
+  // True when the active algorithm must be computed on CPU (error diffusion)
+  const isCpuAlgorithm = algorithm === "floyd-steinberg" || algorithm === "stucki";
+
+  // Ref so the canvas-size effect doesn't fire on the initial 0→w transition
+  // when triggered by the same batch as the image load
+  const imageLoadedRef = useRef(false);
+
+  // Full-res ImageData at the current canvas dimensions — fed to CPU worker for FS/Stucki
+  const srcImageDataRef = useRef<ImageData | null>(null);
+  // Latest CPU job id — used to discard stale worker responses
+  const latestCpuJobIdRef = useRef<number>(-1);
+
+  // ─── Sync state → WebGL (each fires at most once per render batch) ────────
+
+  // New image: upload texture + set initial canvas dimensions
+  useEffect(() => {
+    if (!image) return;
+    imageLoadedRef.current = true;
+    glLoadImage(image.element, canvasWidth, canvasHeight);
+    // canvasWidth/canvasHeight are correct here because handleImageLoad sets
+    // all three in one synchronous call and React 18 batches them
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [image]);
+
+  // Canvas resize: update viewport (skip before first image load)
+  useEffect(() => {
+    if (!imageLoadedRef.current || canvasWidth === 0 || canvasHeight === 0) return;
+    glSetCanvasSize(canvasWidth, canvasHeight);
+  }, [canvasWidth, canvasHeight, glSetCanvasSize]);
+
+  // Live params only flow to WebGL when on Bayer; CPU algorithms ignore live drag
+  useEffect(() => {
+    if (!isCpuAlgorithm) glSetParams(params);
+  }, [params, isCpuAlgorithm, glSetParams]);
+  useEffect(() => { glSetAlgorithm(algorithm);     }, [algorithm,    glSetAlgorithm]);
+  useEffect(() => { glSetPixelSize(pixelSize);     }, [pixelSize,    glSetPixelSize]);
+  useEffect(() => { glSetShowOriginal(showOriginal);}, [showOriginal, glSetShowOriginal]);
+
+  // ─── Worker (CPU) — thumbnails + full-res FS/Stucki ─────────────────────
   const handleWorkerResult = useCallback(
     (result: ImageData, type: "process" | "thumbnail", alg: AlgorithmId, id: number) => {
-      if (type === "process") {
-        if (id !== latestProcessIdRef.current) return; // discard stale results
-        const canvas = canvasRef.current;
-        if (!canvas) return;
-        const ctx = canvas.getContext("2d")!;
-        if (pixelSizeRef.current > 1) {
-          // Scale up the small processed image with nearest-neighbour (pixelated)
-          const tmp = document.createElement("canvas");
-          tmp.width = result.width;
-          tmp.height = result.height;
-          tmp.getContext("2d")!.putImageData(result, 0, 0);
-          ctx.imageSmoothingEnabled = false;
-          ctx.drawImage(tmp, 0, 0, canvas.width, canvas.height);
-        } else {
-          ctx.putImageData(result, 0, 0);
-        }
-        setIsProcessing(false);
-      } else {
+      if (type === "thumbnail") {
         setThumbnails((prev) => {
           const tc = document.createElement("canvas");
-          tc.width = 80;
+          tc.width  = 80;
           tc.height = 80;
           tc.getContext("2d")!.putImageData(result, 0, 0);
           return { ...prev, [alg]: tc.toDataURL() };
         });
+        return;
       }
+      // Full-res CPU frame — discard stale responses
+      if (id !== latestCpuJobIdRef.current) return;
+      const isCpu = alg === "floyd-steinberg" || alg === "stucki";
+      if (!isCpu) return;
+      displayFrame(result);
     },
-    []
+    [displayFrame]
   );
 
   const { process: workerProcess } = useDitherWorker({ onResult: handleWorkerResult });
 
-  // ─── RF-01: Load image ───
+  // Thumbnail generation (80×80, all algorithms)
+  useEffect(() => {
+    if (!image) return;
+    const thumbSize = 80;
+    const srcCanvas = document.createElement("canvas");
+    srcCanvas.width  = thumbSize;
+    srcCanvas.height = thumbSize;
+    const ctx = srcCanvas.getContext("2d")!;
+    ctx.drawImage(image.element, 0, 0, thumbSize, thumbSize);
+    const srcData = ctx.getImageData(0, 0, thumbSize, thumbSize);
+
+    (Object.keys(ALGORITHMS) as AlgorithmId[]).forEach((key) => {
+      workerProcess(srcData, committedParams, key, "thumbnail");
+    });
+  }, [image, committedParams, workerProcess]);
+
+  // Populate srcImageDataRef scaled by pixelSize — smaller image yields pixelated result via NEAREST upscale
+  useEffect(() => {
+    if (!image || canvasWidth === 0 || canvasHeight === 0) return;
+    const w = Math.max(1, Math.round(canvasWidth  / pixelSize));
+    const h = Math.max(1, Math.round(canvasHeight / pixelSize));
+    const offscreen = document.createElement("canvas");
+    offscreen.width  = w;
+    offscreen.height = h;
+    offscreen.getContext("2d")!.drawImage(image.element, 0, 0, w, h);
+    srcImageDataRef.current = offscreen.getContext("2d")!.getImageData(0, 0, w, h);
+  }, [image, canvasWidth, canvasHeight, pixelSize]);
+
+  // Route FS/Stucki to CPU worker; Bayer resumes WebGL shader
+  useEffect(() => {
+    if (!image || !srcImageDataRef.current) return;
+    if (isCpuAlgorithm) {
+      const id = workerProcess(srcImageDataRef.current, committedParams, algorithm, "process");
+      latestCpuJobIdRef.current = id;
+    } else {
+      displayFrame(null);
+    }
+  }, [image, algorithm, committedParams, canvasWidth, canvasHeight, pixelSize, isCpuAlgorithm, workerProcess, displayFrame]);
+
+  // ─── RF-01: Load image ────────────────────────────────────────────────────
   const handleImageLoad = useCallback((file: File) => {
     setUploadError(null);
 
@@ -98,27 +161,26 @@ export default function App() {
       let w = img.width;
       let h = img.height;
 
-      // RF-19: Auto-resize if exceeds MAX_DIMENSION
       if (w > MAX_DIMENSION || h > MAX_DIMENSION) {
         const scale = Math.min(MAX_DIMENSION / w, MAX_DIMENSION / h);
         w = Math.round(w * scale);
         h = Math.round(h * scale);
       }
 
-      const offscreen = document.createElement("canvas");
-      offscreen.width = w;
-      offscreen.height = h;
-      const ctx = offscreen.getContext("2d")!;
-      ctx.drawImage(img, 0, 0, w, h);
-      const data = ctx.getImageData(0, 0, w, h);
+      // Default canvas size: at most 600px on either side
+      const DEFAULT_CANVAS_SIZE = 600;
+      if (w > DEFAULT_CANVAS_SIZE || h > DEFAULT_CANVAS_SIZE) {
+        const scale = Math.min(DEFAULT_CANVAS_SIZE / w, DEFAULT_CANVAS_SIZE / h);
+        w = Math.round(w * scale);
+        h = Math.round(h * scale);
+      }
 
       setImage({
         file,
-        name: file.name,
+        name:    file.name,
         element: img,
-        originalData: data,
-        width: w,
-        height: h,
+        width:   w,
+        height:  h,
       });
       setCanvasWidth(w);
       setCanvasHeight(h);
@@ -126,34 +188,30 @@ export default function App() {
       setParams({ ...DEFAULT_PARAMS });
       setCommittedParams({ ...DEFAULT_PARAMS });
       setAlgorithm(DEFAULT_ALGORITHM);
+      setPixelSize(1);
       setShowOriginal(false);
       setExportDialog(null);
-      srcDataRef.current = null;
     };
     img.src = url;
   }, []);
 
-  // ─── RF-10: Export PNG ───
+  // ─── RF-10: Export PNG ────────────────────────────────────────────────────
   const handleExport = useCallback(() => {
-    if (!canvasRef.current || !image) return;
+    if (!image) return;
+    const dataUrl = exportDataUrl("image/png");
+    if (!dataUrl) return;
 
-    const dataUrl = canvasRef.current.toDataURL("image/png");
-    const link = document.createElement("a");
-    const baseName = image.name.replace(/\.[^.]+$/, "");
-    const fileName = `${baseName}-dithered.png`;
-    link.download = fileName;
-    link.href = dataUrl;
+    const link      = document.createElement("a");
+    const baseName  = image.name.replace(/\.[^.]+$/, "");
+    const fileName  = `${baseName}-dithered.png`;
+    link.download   = fileName;
+    link.href       = dataUrl;
     link.click();
 
-    setExportDialog({
-      fileName,
-      width: canvasWidth,
-      height: canvasHeight,
-      algorithm,
-    });
-  }, [image, canvasWidth, canvasHeight, algorithm]);
+    setExportDialog({ fileName, width: canvasWidth, height: canvasHeight, algorithm });
+  }, [image, canvasWidth, canvasHeight, algorithm, exportDataUrl]);
 
-  // ─── RF-11: Reset all ───
+  // ─── RF-11: Reset all ─────────────────────────────────────────────────────
   const handleReset = useCallback(() => {
     setParams({ ...DEFAULT_PARAMS });
     setCommittedParams({ ...DEFAULT_PARAMS });
@@ -166,119 +224,39 @@ export default function App() {
     }
   }, [image]);
 
-  // ─── RF-02: Real-time preview with debounce ───
-  useEffect(() => {
-    if (!image || !canvasRef.current) return;
-
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-
-    debounceRef.current = setTimeout(() => {
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-
-      // Fix: only reset canvas dimensions when they actually change
-      if (canvas.width !== canvasWidth) canvas.width = canvasWidth;
-      if (canvas.height !== canvasHeight) canvas.height = canvasHeight;
-      const ctx = canvas.getContext("2d")!;
-
-      if (showOriginal) {
-        ctx.drawImage(image.element, 0, 0, canvasWidth, canvasHeight);
-        return;
-      }
-
-      setIsProcessing(true);
-
-      // Reduce target resolution by pixelSize so each dither dot = pixelSize px
-      const targetW = Math.max(1, Math.round(canvasWidth / pixelSize));
-      const targetH = Math.max(1, Math.round(canvasHeight / pixelSize));
-
-      // Cache the scaled source ImageData; only rebuild on dimension/image/pixelSize change
-      const imageId = image.name + image.width + image.height;
-      if (
-        !srcDataRef.current ||
-        srcDimensionsRef.current.w !== targetW ||
-        srcDimensionsRef.current.h !== targetH ||
-        srcDimensionsRef.current.imageId !== imageId
-      ) {
-        const srcCanvas = document.createElement("canvas");
-        srcCanvas.width = targetW;
-        srcCanvas.height = targetH;
-        const srcCtx = srcCanvas.getContext("2d")!;
-        srcCtx.drawImage(image.element, 0, 0, targetW, targetH);
-        srcDataRef.current = srcCtx.getImageData(0, 0, targetW, targetH);
-        srcDimensionsRef.current = { w: targetW, h: targetH, imageId };
-      }
-
-      const id = workerProcess(srcDataRef.current, params, algorithm, "process");
-      latestProcessIdRef.current = id;
-    }, DEBOUNCE_BY_ALGORITHM[algorithm]);
-
-    return () => {
-      if (debounceRef.current) clearTimeout(debounceRef.current);
-    };
-  }, [image, params, algorithm, showOriginal, canvasWidth, canvasHeight, pixelSize, workerProcess]);
-
-  // ─── RF-09: Generate thumbnails — only on image load or committed params ───
-  useEffect(() => {
-    if (!image) return;
-
-    const thumbSize = 80;
-    const srcCanvas = document.createElement("canvas");
-    srcCanvas.width = thumbSize;
-    srcCanvas.height = thumbSize;
-    const srcCtx = srcCanvas.getContext("2d")!;
-    srcCtx.drawImage(image.element, 0, 0, thumbSize, thumbSize);
-    const srcData = srcCtx.getImageData(0, 0, thumbSize, thumbSize);
-
-    (Object.keys(ALGORITHMS) as AlgorithmId[]).forEach((key) => {
-      workerProcess(srcData, committedParams, key, "thumbnail");
-    });
-  }, [image, committedParams, workerProcess]);
-
-  // ─── RF-18: Keyboard shortcuts ───
+  // ─── RF-18: Keyboard shortcuts ────────────────────────────────────────────
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (!image) return;
       if ((e.target as HTMLElement).tagName === "INPUT") return;
 
-      if (e.code === "Space") {
-        e.preventDefault();
-        setShowOriginal((v) => !v);
-      }
+      if (e.code === "Space") { e.preventDefault(); setShowOriginal((v) => !v); }
       if (e.code === "Digit1") setAlgorithm("floyd-steinberg");
       if (e.code === "Digit2") setAlgorithm("bayer");
       if (e.code === "Digit3") setAlgorithm("stucki");
-      if (e.code === "KeyR" && !e.ctrlKey && !e.metaKey) {
-        handleReset();
-      }
+      if (e.code === "KeyR" && !e.ctrlKey && !e.metaKey) handleReset();
       if ((e.ctrlKey || e.metaKey) && e.code === "KeyS") {
         e.preventDefault();
         handleExport();
       }
     };
-
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [image, handleReset, handleExport]);
 
-  // ─── RF-08: Canvas resize (always proportional) ───
-  const handleWidthChange = useCallback(
-    (w: number) => {
-      setCanvasWidth(w);
-      if (aspectRatio) setCanvasHeight(Math.round(w / aspectRatio));
-    },
-    [aspectRatio]
-  );
+  // ─── RF-08: Canvas resize (locked aspect ratio) ───────────────────────────
+  const handleWidthChange = useCallback((w: number) => {
+    setCanvasWidth(w);
+    if (aspectRatio) setCanvasHeight(Math.round(w / aspectRatio));
+  }, [aspectRatio]);
 
-  const handleHeightChange = useCallback(
-    (h: number) => {
-      setCanvasHeight(h);
-      if (aspectRatio) setCanvasWidth(Math.round(h * aspectRatio));
-    },
-    [aspectRatio]
-  );
+  const handleHeightChange = useCallback((h: number) => {
+    setCanvasHeight(h);
+    if (aspectRatio) setCanvasWidth(Math.round(h * aspectRatio));
+  }, [aspectRatio]);
 
   const handleNewImage = useCallback(() => {
+    imageLoadedRef.current = false;
     setImage(null);
     setExportDialog(null);
     setThumbnails({});
@@ -286,7 +264,6 @@ export default function App() {
     setCommittedParams({ ...DEFAULT_PARAMS });
     setAlgorithm(DEFAULT_ALGORITHM);
     setPixelSize(1);
-    srcDataRef.current = null;
   }, []);
 
   const handleParamChange = useCallback(
@@ -303,7 +280,7 @@ export default function App() {
     []
   );
 
-  // ─── Render ───
+  // ─── Render ───────────────────────────────────────────────────────────────
   return (
     <div className="h-screen w-screen bg-neutral-950 text-neutral-100 flex flex-col overflow-hidden font-mono">
       <Header
@@ -343,7 +320,6 @@ export default function App() {
           <PreviewCanvas
             ref={canvasRef}
             showOriginal={showOriginal}
-            isProcessing={isProcessing}
           />
 
           {isMobile && (

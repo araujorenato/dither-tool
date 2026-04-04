@@ -6,9 +6,12 @@ import type { ImageParams, AlgorithmId } from "./types";
  */
 export function applyAdjustments(
   imageData: ImageData,
-  params: ImageParams
+  params: ImageParams,
+  out?: Uint8ClampedArray
 ): ImageData {
-  const data = new Uint8ClampedArray(imageData.data);
+  const size = imageData.data.length;
+  const data = (out && out.length >= size) ? out : new Uint8ClampedArray(size);
+  data.set(imageData.data);
   const { contrast, highlights, shadows, gamma } = params;
 
   const contrastFactor = (259 * (contrast + 255)) / (255 * (259 - contrast));
@@ -56,8 +59,9 @@ export function applyAdjustments(
 }
 
 /** Convert RGBA ImageData to grayscale float array */
-export function toGrayscale(imageData: ImageData): Float32Array {
-  const gray = new Float32Array(imageData.width * imageData.height);
+export function toGrayscale(imageData: ImageData, out?: Float32Array): Float32Array {
+  const size = imageData.width * imageData.height;
+  const gray = (out && out.length >= size) ? out : new Float32Array(size);
   const data = imageData.data;
   for (let i = 0; i < gray.length; i++) {
     const idx = i * 4;
@@ -70,9 +74,11 @@ export function toGrayscale(imageData: ImageData): Float32Array {
 export function grayToImageData(
   gray: Float32Array,
   width: number,
-  height: number
+  height: number,
+  out?: Uint8ClampedArray
 ): ImageData {
-  const data = new Uint8ClampedArray(width * height * 4);
+  const size = width * height * 4;
+  const data = (out && out.length >= size) ? out : new Uint8ClampedArray(size);
   for (let i = 0; i < gray.length; i++) {
     const v = Math.min(255, Math.max(0, Math.round(gray[i])));
     const idx = i * 4;
@@ -91,9 +97,11 @@ export function floydSteinberg(
   gray: Float32Array,
   width: number,
   height: number,
-  granulation: number
+  granulation: number,
+  buf?: Float32Array
 ): Float32Array {
-  const out = new Float32Array(gray);
+  const out = (buf && buf.length >= gray.length) ? buf : new Float32Array(gray.length);
+  out.set(gray);
   const strength = (granulation + 100) / 200;
 
   for (let y = 0; y < height; y++) {
@@ -120,7 +128,8 @@ export function bayerDither(
   gray: Float32Array,
   width: number,
   height: number,
-  granulation: number
+  granulation: number,
+  buf?: Float32Array
 ): Float32Array {
   const bayer4 = [
     [0, 8, 2, 10],
@@ -128,7 +137,8 @@ export function bayerDither(
     [3, 11, 1, 9],
     [15, 7, 13, 5],
   ];
-  const out = new Float32Array(gray.length);
+  // Bayer doesn't read previous values so no need to copy — just reuse the buffer
+  const out = (buf && buf.length >= gray.length) ? buf : new Float32Array(gray.length);
   const threshold = 255 / 16;
   const strength = 0.3 + ((granulation + 100) / 200) * 1.4;
 
@@ -147,9 +157,11 @@ export function stuckiDither(
   gray: Float32Array,
   width: number,
   height: number,
-  granulation: number
+  granulation: number,
+  buf?: Float32Array
 ): Float32Array {
-  const out = new Float32Array(gray);
+  const out = (buf && buf.length >= gray.length) ? buf : new Float32Array(gray.length);
+  out.set(gray);
   const strength = (granulation + 100) / 200;
   const div = 42;
 

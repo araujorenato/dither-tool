@@ -17,7 +17,6 @@ export interface LoadedImage {
   file: File;
   name: string;
   element: HTMLImageElement;
-  originalData: ImageData;
   width: number;
   height: number;
 }

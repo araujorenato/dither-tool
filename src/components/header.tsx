@@ -1,4 +1,4 @@
-import { Eye, EyeOff, ImagePlus, Grid3X3, RotateCcw, Download } from "lucide-react";
+import { Eye, EyeOff, ImagePlus, RotateCcw, Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import ditherLogo from "../../public/ditherlogo.svg";
 
