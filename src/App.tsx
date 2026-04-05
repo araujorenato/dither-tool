@@ -28,6 +28,7 @@ export default function App() {
   const [isPlaying, setIsPlaying]                 = useState(false);
   const [animationDelay, setAnimationDelay]       = useState(1.00); // seconds per frame
   const [animationMode, setAnimationMode]         = useState<"normal" | "ping-pong">("normal");
+  const [allFrames, setAllFrames]                 = useState(false);
 
   // ─── Global state ─────────────────────────────────────────────────────────
   const [showOriginal, setShowOriginal]   = useState(false);
@@ -59,11 +60,13 @@ export default function App() {
   const playbackTimerRef      = useRef<ReturnType<typeof setTimeout> | null>(null);
   const animationModeRef      = useRef(animationMode);
   const pingPongDirRef        = useRef<1 | -1>(1);
+  const isPlayingRef          = useRef(isPlaying);
 
   currentFrameIndexRef.current = currentFrameIndex;
   framesRef.current            = frames;
   framesLengthRef.current      = frames.length;
   animationModeRef.current     = animationMode;
+  isPlayingRef.current         = isPlaying;
 
   // ─── WebGL renderer ───────────────────────────────────────────────────────
   const {
@@ -217,6 +220,11 @@ export default function App() {
     workerProcess(srcData, currentCommitted, currentAlgorithm, "thumbnail", currentFrameIndex);
   }, [currentImage, currentCommitted, currentAlgorithm, currentFrameIndex, isPlaying, workerProcess]);
 
+  // Auto-reset "all frames" when only one frame remains
+  useEffect(() => {
+    if (frames.length <= 1) setAllFrames(false);
+  }, [frames.length]);
+
   // ─── Animation playback ───────────────────────────────────────────────────
   // Reset ping-pong direction when mode changes or playback stops
   useEffect(() => { pingPongDirRef.current = 1; }, [animationMode, isPlaying]);
@@ -313,6 +321,10 @@ export default function App() {
   // ─── RF-01: Load image ────────────────────────────────────────────────────
   const handleImageLoad = useCallback((file: File) => {
     setUploadError(null);
+    if (file.type === "image/gif") {
+      handleGifLoad(file);
+      return;
+    }
     const url = URL.createObjectURL(file);
     const img = new Image();
     img.onload = () => {
@@ -353,10 +365,80 @@ export default function App() {
       }]);
     };
     img.src = url;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ─── RF-10: Export PNG ────────────────────────────────────────────────────
-  const handleExport = useCallback(() => {
+  // ─── RF-02: Load GIF ──────────────────────────────────────────────────────
+  const handleGifLoad = useCallback(async (file: File) => {
+    const { parseGIF, decompressFrames } = await import("gifuct-js");
+    const buffer = await file.arrayBuffer();
+    const gif = parseGIF(buffer);
+    const gifFrames = decompressFrames(gif, true);
+    if (!gifFrames.length) return;
+
+    let w = gifFrames[0].dims.width;
+    let h = gifFrames[0].dims.height;
+    if (w > MAX_DIMENSION || h > MAX_DIMENSION) {
+      const scale = Math.min(MAX_DIMENSION / w, MAX_DIMENSION / h);
+      w = Math.round(w * scale);
+      h = Math.round(h * scale);
+    }
+    const DEFAULT_CANVAS_SIZE = 600;
+    if (w > DEFAULT_CANVAS_SIZE || h > DEFAULT_CANVAS_SIZE) {
+      const scale = Math.min(DEFAULT_CANVAS_SIZE / w, DEFAULT_CANVAS_SIZE / h);
+      w = Math.round(w * scale);
+      h = Math.round(h * scale);
+    }
+
+    // Composite GIF frames sequentially onto an offscreen canvas
+    const offscreen = document.createElement("canvas");
+    offscreen.width  = gifFrames[0].dims.width;
+    offscreen.height = gifFrames[0].dims.height;
+    const ctx = offscreen.getContext("2d")!;
+
+    const loadedFrames: AnimationFrame[] = [];
+    for (const gf of gifFrames) {
+      if (gf.disposalType === 2) {
+        ctx.clearRect(gf.dims.left, gf.dims.top, gf.dims.width, gf.dims.height);
+      }
+      const patch = new ImageData(Uint8ClampedArray.from(gf.patch), gf.dims.width, gf.dims.height);
+      ctx.putImageData(patch, gf.dims.left, gf.dims.top);
+
+      const dataUrl = offscreen.toDataURL("image/png");
+      const img = await new Promise<HTMLImageElement>((resolve) => {
+        const el = new Image();
+        el.onload = () => resolve(el);
+        el.src = dataUrl;
+      });
+
+      const loadedImage: LoadedImage = { file, name: file.name, element: img, width: w, height: h };
+      loadedFrames.push({
+        id: crypto.randomUUID(),
+        image: loadedImage,
+        params: { ...DEFAULT_PARAMS },
+        committedParams: { ...DEFAULT_PARAMS },
+        algorithm: DEFAULT_ALGORITHM,
+        pixelSize: 1,
+        processedData: null,
+        thumbnailUrl: null,
+      });
+    }
+
+    const delaySeconds = Math.max(0.01, (gifFrames[0].delay ?? 100) / 1000);
+
+    setCanvasWidth(w);
+    setCanvasHeight(h);
+    setAspectRatio(w / h);
+    setShowOriginal(false);
+    setExportDialog(null);
+    setIsPlaying(false);
+    setCurrentFrameIndex(0);
+    setAnimationDelay(delaySeconds);
+    setFrames(loadedFrames);
+  }, []);
+
+  // ─── RF-10: Export PNG (current frame) ───────────────────────────────────
+  const handleExportPng = useCallback(() => {
     if (!currentImage) return;
     const dataUrl = exportDataUrl("image/png");
     if (!dataUrl) return;
@@ -370,6 +452,41 @@ export default function App() {
 
     setExportDialog({ fileName, width: canvasWidth, height: canvasHeight, algorithm: currentAlgorithm });
   }, [currentImage, canvasWidth, canvasHeight, currentAlgorithm, exportDataUrl]);
+
+  // ─── RF-10b: Export GIF (all frames) ─────────────────────────────────────
+  const handleExportGif = useCallback(async () => {
+    if (!currentImage) return;
+    const frameData = framesRef.current.map(f => f.processedData);
+    if (frameData.some(d => d === null)) return;
+
+    const { GIFEncoder } = await import("gifenc");
+    const gif = GIFEncoder();
+    const delayMs = Math.round(animationDelay * 1000);
+
+    for (const data of frameData as ImageData[]) {
+      const { width, height } = data;
+      const rgba = data.data;
+      const palette: [number, number, number][] = [[0, 0, 0], [255, 255, 255]];
+      const indices = new Uint8Array(width * height);
+      for (let i = 0; i < indices.length; i++) {
+        indices[i] = rgba[i * 4] > 128 ? 1 : 0;
+      }
+      gif.writeFrame(indices, width, height, { palette, delay: delayMs });
+    }
+
+    gif.finish();
+    const blob = new Blob([new Uint8Array(gif.bytes())], { type: "image/gif" });
+    const url = URL.createObjectURL(blob);
+    const baseName = currentImage.name.replace(/\.[^.]+$/, "");
+    const fileName = `${baseName}-dithered.gif`;
+    const link = document.createElement("a");
+    link.download = fileName;
+    link.href = url;
+    link.click();
+    URL.revokeObjectURL(url);
+
+    setExportDialog({ fileName, width: canvasWidth, height: canvasHeight, algorithm: currentAlgorithm });
+  }, [currentImage, animationDelay, canvasWidth, canvasHeight, currentAlgorithm]);
 
   // ─── RF-11: Reset current frame ───────────────────────────────────────────
   const handleReset = useCallback(() => {
@@ -406,15 +523,21 @@ export default function App() {
         setFrames(prev => prev.map((f, i) => i === currentFrameIndexRef.current
           ? { ...f, algorithm: "stucki", processedData: null } : f));
       }
+      if ((e.code === "ArrowLeft" || (e.code === "KeyA" && !e.ctrlKey && !e.metaKey)) && !isPlayingRef.current && framesLengthRef.current > 1) {
+        setCurrentFrameIndex(prev => Math.max(0, prev - 1));
+      }
+      if ((e.code === "ArrowRight" || (e.code === "KeyD" && !e.ctrlKey && !e.metaKey)) && !isPlayingRef.current && framesLengthRef.current > 1) {
+        setCurrentFrameIndex(prev => Math.min(framesLengthRef.current - 1, prev + 1));
+      }
       if (e.code === "KeyR" && !e.ctrlKey && !e.metaKey) handleReset();
       if ((e.ctrlKey || e.metaKey) && e.code === "KeyS") {
         e.preventDefault();
-        handleExport();
+        handleExportPng();
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [currentImage, handleReset, handleExport]);
+  }, [currentImage, handleReset, handleExportPng]);
 
   // ─── RF-08: Canvas resize (locked aspect ratio) ───────────────────────────
   const handleWidthChange = useCallback((w: number) => {
@@ -443,36 +566,45 @@ export default function App() {
   const handleParamChange = useCallback(
     <K extends keyof ImageParams>(key: K, value: ImageParams[K]) => {
       setFrames(prev => prev.map((f, i) =>
-        i === currentFrameIndexRef.current ? { ...f, params: { ...f.params, [key]: value } } : f
+        allFrames || i === currentFrameIndexRef.current
+          ? { ...f, params: { ...f.params, [key]: value } }
+          : f
       ));
     },
-    []
+    [allFrames]
   );
 
   const handleParamCommit = useCallback(
     <K extends keyof ImageParams>(key: K, value: ImageParams[K]) => {
       setFrames(prev => prev.map((f, i) =>
-        i === currentFrameIndexRef.current
+        allFrames || i === currentFrameIndexRef.current
           ? { ...f, committedParams: { ...f.committedParams, [key]: value }, processedData: null }
           : f
       ));
     },
-    []
+    [allFrames]
   );
 
   const handleAlgorithmChange = useCallback((alg: AlgorithmId) => {
     setFrames(prev => prev.map((f, i) =>
-      i === currentFrameIndexRef.current ? { ...f, algorithm: alg, processedData: null } : f
+      allFrames || i === currentFrameIndexRef.current
+        ? { ...f, algorithm: alg, processedData: null }
+        : f
     ));
-  }, []);
+  }, [allFrames]);
 
   const handlePixelSizeChange = useCallback((px: number) => {
     setFrames(prev => prev.map((f, i) =>
-      i === currentFrameIndexRef.current ? { ...f, pixelSize: px, processedData: null } : f
+      allFrames || i === currentFrameIndexRef.current
+        ? { ...f, pixelSize: px, processedData: null }
+        : f
     ));
-  }, []);
+  }, [allFrames]);
 
   // ─── Render ───────────────────────────────────────────────────────────────
+  const canExportGif      = frames.length > 0 && frames.every(f => f.processedData !== null);
+  const hasMultipleFrames = frames.length > 1;
+
   return (
     <div className="h-screen w-screen bg-neutral-950 text-neutral-100 flex flex-col overflow-hidden font-mono">
       <Header
@@ -481,7 +613,9 @@ export default function App() {
         onToggleOriginal={() => setShowOriginal((v) => !v)}
         onNewImage={handleNewImage}
         onReset={handleReset}
-        onExport={handleExport}
+        onExportPng={handleExportPng}
+        onExportGif={handleExportGif}
+        canExportGif={canExportGif}
       />
 
       {!currentImage ? (
@@ -506,6 +640,9 @@ export default function App() {
               onWidthChange={handleWidthChange}
               onHeightChange={handleHeightChange}
               onPixelSizeChange={handlePixelSizeChange}
+              allFrames={allFrames}
+              hasMultipleFrames={hasMultipleFrames}
+              onToggleAllFrames={() => setAllFrames(v => !v)}
             />
           )}
 
@@ -542,7 +679,12 @@ export default function App() {
               onPixelSizeChange={handlePixelSizeChange}
               isMobile
               onReset={handleReset}
-              onExport={handleExport}
+              onExportPng={handleExportPng}
+              onExportGif={handleExportGif}
+              canExportGif={canExportGif}
+              allFrames={allFrames}
+              hasMultipleFrames={hasMultipleFrames}
+              onToggleAllFrames={() => setAllFrames(v => !v)}
             />
           )}
         </div>

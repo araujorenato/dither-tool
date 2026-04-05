@@ -1,5 +1,5 @@
-import React from "react";
-import { Contrast, Sun, Moon, Layers, CircleDot, Grid2X2, RotateCcw, Download } from "lucide-react";
+import React, { useState, useRef, useEffect } from "react";
+import { Contrast, Sun, Moon, Layers, CircleDot, Grid2X2, RotateCcw, Download, ChevronDown } from "lucide-react";
 import { SliderControl } from "@/components/slider-control";
 import { AlgorithmCard } from "@/components/algorithm-card";
 import { CanvasSize } from "@/components/canvas-size";
@@ -22,7 +22,12 @@ interface SidebarProps {
   onPixelSizeChange: (value: number) => void;
   isMobile?: boolean;
   onReset?: () => void;
-  onExport?: () => void;
+  onExportPng?: () => void;
+  onExportGif?: () => void;
+  canExportGif?: boolean;
+  allFrames?: boolean;
+  hasMultipleFrames?: boolean;
+  onToggleAllFrames?: () => void;
 }
 
 export const Sidebar = React.memo(function Sidebar({
@@ -40,15 +45,55 @@ export const Sidebar = React.memo(function Sidebar({
   onPixelSizeChange,
   isMobile,
   onReset,
-  onExport,
+  onExportPng,
+  onExportGif,
+  canExportGif,
+  allFrames,
+  hasMultipleFrames,
+  onToggleAllFrames,
 }: SidebarProps) {
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!exportMenuOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setExportMenuOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [exportMenuOpen]);
+
   const content = (
     <>
       {/* Adjustments (RF-03 to RF-07) */}
       <div className="space-y-4">
-        <h2 className="text-[10px] font-bold tracking-[0.2em] uppercase text-neutral-600">
-          Adjustments
-        </h2>
+        <div className="flex items-center justify-between">
+          <h2 className="text-[10px] font-bold tracking-[0.2em] uppercase text-neutral-600">
+            Adjustments
+          </h2>
+          {hasMultipleFrames && (
+            <label className="flex items-center gap-1.5 text-[10px] text-neutral-400 font-mono cursor-pointer select-none">
+              <span>All frames</span>
+              <button
+                role="switch"
+                aria-checked={allFrames}
+                onClick={onToggleAllFrames}
+                className={[
+                  "w-7 h-[15px] rounded-full transition-colors flex items-center px-0.5",
+                  allFrames ? "bg-white/80" : "bg-neutral-600",
+                ].join(" ")}
+              >
+                <span className={[
+                  "block w-[11px] h-[11px] rounded-full bg-white shadow transition-transform",
+                  allFrames ? "translate-x-3" : "translate-x-0",
+                ].join(" ")} />
+              </button>
+            </label>
+          )}
+        </div>
 
         <SliderControl
           label="Contrast"
@@ -154,10 +199,30 @@ export const Sidebar = React.memo(function Sidebar({
             <RotateCcw size={12} />
             Reset
           </Button>
-          <Button size="sm" className="flex-1" onClick={onExport}>
-            <Download size={12} />
-            Export PNG
-          </Button>
+          <div className="relative flex-1" ref={menuRef}>
+            <Button size="sm" className="w-full" onClick={() => setExportMenuOpen(v => !v)}>
+              <Download size={12} />
+              Export
+              <ChevronDown size={10} className={`transition-transform ${exportMenuOpen ? "rotate-180" : ""}`} />
+            </Button>
+            {exportMenuOpen && (
+              <div className="absolute right-0 bottom-full mb-1 z-50 bg-neutral-900 border border-white/15 rounded shadow-xl overflow-hidden min-w-[180px]">
+                <button
+                  onClick={() => { onExportPng?.(); setExportMenuOpen(false); }}
+                  className="w-full text-left px-3 py-2 text-[11px] font-mono text-neutral-200 hover:bg-white/10 transition-colors"
+                >
+                  PNG file (Current frame)
+                </button>
+                <button
+                  onClick={() => { onExportGif?.(); setExportMenuOpen(false); }}
+                  disabled={!canExportGif}
+                  className="w-full text-left px-3 py-2 text-[11px] font-mono text-neutral-200 hover:bg-white/10 disabled:text-neutral-600 disabled:cursor-not-allowed transition-colors"
+                >
+                  GIF file
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </div>
     );

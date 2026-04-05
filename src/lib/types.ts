@@ -64,5 +64,5 @@ export interface AnimationFrame {
   thumbnailUrl: string | null;
 }
 
-export const VALID_IMAGE_TYPES = ["image/png", "image/jpeg", "image/webp"];
+export const VALID_IMAGE_TYPES = ["image/png", "image/jpeg", "image/webp", "image/gif"];
 export const MAX_DIMENSION = 4000;

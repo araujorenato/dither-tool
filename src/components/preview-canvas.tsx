@@ -370,7 +370,7 @@ export const PreviewCanvas = forwardRef<HTMLCanvasElement, PreviewCanvasProps>(
         )}
 
         {/* Keyboard hints */}
-        <div className="hidden sm:flex absolute bottom-4 left-1/2 -translate-x-1/2 items-center gap-4 text-[9px] text-neutral-700 tracking-wider uppercase">
+        <div className="hidden w-full justify-center sm:flex absolute bottom-4 left-1/2 -translate-x-1/2 items-center gap-4 text-[9px] text-neutral-700 tracking-wider uppercase">
           <span>
             <kbd className="px-1.5 py-0.5 rounded border border-neutral-800 bg-neutral-900 text-neutral-500 font-mono text-[9px]">
               Space
@@ -395,6 +395,22 @@ export const PreviewCanvas = forwardRef<HTMLCanvasElement, PreviewCanvasProps>(
             </kbd>{" "}
             export
           </span>
+          {frames.length > 1 && (
+            <>
+              <span>
+                <kbd className="px-1.5 py-0.5 rounded border border-neutral-800 bg-neutral-900 text-neutral-500 font-mono text-[9px]">
+                  A/←
+                </kbd>{" "}
+                prev frame
+              </span>
+              <span>
+                <kbd className="px-1.5 py-0.5 rounded border border-neutral-800 bg-neutral-900 text-neutral-500 font-mono text-[9px]">
+                  D/→
+                </kbd>{" "}
+                next frame
+              </span>
+            </>
+          )}
           <span>
             <kbd className="px-1.5 py-0.5 rounded border border-neutral-800 bg-neutral-900 text-neutral-500 font-mono text-[9px]">
               scroll

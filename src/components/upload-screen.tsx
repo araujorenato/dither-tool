@@ -15,7 +15,7 @@ export function UploadScreen({ onImageLoad, onError, error }: UploadScreenProps)
   const handleFile = useCallback(
     (file: File) => {
       if (!VALID_IMAGE_TYPES.includes(file.type)) {
-        onError("Unsupported format. Use PNG, JPG or WEBP.");
+        onError("Unsupported format. Use PNG, JPG, WEBP or GIF.");
         return;
       }
       onImageLoad(file);
@@ -58,7 +58,7 @@ export function UploadScreen({ onImageLoad, onError, error }: UploadScreenProps)
         <input
           ref={inputRef}
           type="file"
-          accept="image/png,image/jpeg,image/webp"
+          accept="image/png,image/jpeg,image/webp,image/gif"
           className="hidden"
           onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0])}
         />
@@ -84,7 +84,7 @@ export function UploadScreen({ onImageLoad, onError, error }: UploadScreenProps)
           </p>
           <p className="text-xs text-neutral-600">or click to browse</p>
           <p className="text-[10px] text-neutral-700 tracking-wider uppercase">
-            PNG · JPG · WEBP
+            PNG · JPG · WEBP · GIF
           </p>
         </div>
 
