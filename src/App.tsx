@@ -456,14 +456,20 @@ export default function App() {
   // ─── RF-10b: Export GIF (all frames) ─────────────────────────────────────
   const handleExportGif = useCallback(async () => {
     if (!currentImage) return;
-    const frameData = framesRef.current.map(f => f.processedData);
-    if (frameData.some(d => d === null)) return;
+    const allFrameData = framesRef.current.map(f => f.processedData);
+    if (allFrameData.some(d => d === null)) return;
+
+    const frameData = allFrameData as ImageData[];
+    const sequence: ImageData[] =
+      animationMode === "ping-pong" && frameData.length > 2
+        ? [...frameData, ...frameData.slice(1, -1).reverse()]
+        : frameData;
 
     const { GIFEncoder } = await import("gifenc");
     const gif = GIFEncoder();
     const delayMs = Math.round(animationDelay * 1000);
 
-    for (const data of frameData as ImageData[]) {
+    for (const data of sequence) {
       const { width, height } = data;
       const rgba = data.data;
       const palette: [number, number, number][] = [[0, 0, 0], [255, 255, 255]];
@@ -486,7 +492,7 @@ export default function App() {
     URL.revokeObjectURL(url);
 
     setExportDialog({ fileName, width: canvasWidth, height: canvasHeight, algorithm: currentAlgorithm });
-  }, [currentImage, animationDelay, canvasWidth, canvasHeight, currentAlgorithm]);
+  }, [currentImage, animationDelay, animationMode, canvasWidth, canvasHeight, currentAlgorithm]);
 
   // ─── RF-11: Reset current frame ───────────────────────────────────────────
   const handleReset = useCallback(() => {
